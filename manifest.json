@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Threads Media Downloader",
+  "version": "1.0",
+  "description": "Adds a download button to Threads posts to save videos and photos.",
+  "permissions": [
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://*.threads.net/*",
+    "https://*.threads.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.threads.net/*",
+        "https://*.threads.com/*"
+      ],
+      "js": ["content.js"]
+    }
+  ]
+}
