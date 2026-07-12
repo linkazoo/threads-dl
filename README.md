@@ -36,3 +36,5 @@ threads-dl 是一款用 JavaScript 編寫的輕量化 Threads 媒體下載 Chrom
 6. 貼文下方的「分享」按鈕旁就會出現 __Download Media__ 按鈕。
 
 請注意，此擴充功能同時支援「河道/動態消息（Feed）檢視」與「單篇貼文檢視」，但無法直接下載內嵌在引用貼文（Quoted Post）中的媒體。若要下載該類媒體，您需要先點入該篇原始貼文，將其切換至河道動態或單篇貼文檢視中。
+
+![](./download_media.png)
