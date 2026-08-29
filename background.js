@@ -1,11 +1,16 @@
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "download_media") {
-    const { username, date, postId, mediaUrls } = message.data;
+    const { username, date, postId } = message.data;
+    // mediaUrls is retained for compatibility with older content-script builds.
+    const mediaFiles = message.data.mediaFiles || (message.data.mediaUrls || []).map((url, index) => ({
+      url,
+      mediaNumber: index + 1,
+      type: url.includes('.mp4') || url.includes('video') ? 'video' : 'image',
+    }));
 
-    mediaUrls.forEach((url, index) => {
-      const mediaNumber = index + 1;
+    mediaFiles.forEach(({ url, type, mediaNumber }) => {
       let extension = "jpg";
-      if (url.includes(".mp4") || url.includes("video")) extension = "mp4";
+      if (type === 'video' || url.includes(".mp4") || url.includes("video")) extension = "mp4";
       if (url.includes(".webp")) extension = "webp";
 
       const filename = `${username}_${date}_${postId}_${mediaNumber}.${extension}`;
