@@ -54,6 +54,17 @@ function isPostPermalink(link) {
   return /^\/@[^/]+\/post\/[^/?#]+/.test(link?.getAttribute('href') || '');
 }
 
+function isPostComposer() {
+  if (window.location.pathname.startsWith('/intent/post')) return true;
+  // Threads may open its composer at another route (for example from the
+  // activity page). A writable editor plus media Remove controls identifies
+  // that draft UI without relying on generated class names.
+  return Boolean(
+    document.querySelector('[contenteditable="true"]') &&
+    document.querySelector('[aria-label="Remove"], [title="Remove"]')
+  );
+}
+
 function getCurrentPostPath() {
   const match = window.location.pathname.match(/^\/@[^/]+\/post\/[^/?#]+/);
   return match?.[0] || '';
@@ -461,6 +472,11 @@ function injectMediaDownloadButton(scope, item) {
 
 function injectButtons() {
   if (!hasExtensionContext()) return;
+  if (isPostComposer()) {
+    document.querySelectorAll(`.${DOWNLOAD_BUTTON_CLASS}, .${ITEM_DOWNLOAD_BUTTON_CLASS}`)
+      .forEach(button => button.remove());
+    return;
+  }
   finishLazyVideoDownload();
   const { actionRows, scopes } = findDownloadScopes();
   const scopeRows = new Set(scopes.map(scope => scope.actionRow));
