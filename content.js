@@ -55,14 +55,31 @@ function isPostPermalink(link) {
 }
 
 function isPostComposer() {
-  if (window.location.pathname.startsWith('/intent/post')) return true;
-  // Threads may open its composer at another route (for example from the
-  // activity page). A writable editor plus media Remove controls identifies
-  // that draft UI without relying on generated class names.
-  return Boolean(
-    document.querySelector('[contenteditable="true"]') &&
-    document.querySelector('[aria-label="Remove"], [title="Remove"]')
-  );
+  // The share-intent route is Threads' dedicated composer. Do not infer
+  // composer state from generic editable fields or “Remove” controls: both
+  // can also be present in normal feed and post views.
+  return window.location.pathname.startsWith('/intent/post');
+}
+
+function isMediaInDraftComposer(media) {
+  // Threads can open an editor outside /intent/post. Identify a draft from
+  // controls local to the media itself: a writable editor plus the native
+  // Remove control positioned on that attachment. This deliberately avoids a
+  // page-wide check, because feeds can also contain editable reply boxes.
+  const mediaRect = media.getBoundingClientRect();
+  let node = media.parentElement;
+  for (let depth = 0; node && node !== document.body && depth < 20; depth += 1, node = node.parentElement) {
+    if (!node.querySelector('[contenteditable="true"]')) continue;
+    const hasAttachmentRemoveControl = [...node.querySelectorAll('[aria-label*="Remove"], [title*="Remove"]')]
+      .some(control => {
+        const rect = control.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 &&
+          rect.left >= mediaRect.left - 24 && rect.right <= mediaRect.right + 24 &&
+          rect.top >= mediaRect.top - 24 && rect.bottom <= mediaRect.bottom + 24;
+      });
+    if (hasAttachmentRemoveControl) return true;
+  }
+  return false;
 }
 
 function getCurrentPostPath() {
@@ -83,14 +100,21 @@ function getPostPermalink(element) {
   return links.find(link => new URL(link.href).pathname === currentPostPath) || links[0] || null;
 }
 
+// Threads has used both aria-label and title for native action icons. Keep
+// this selector centralized so a markup-only accessibility change cannot make
+// the extension lose every response row.
+function getNativeActionIcon(element, label) {
+  return element.querySelector(`svg[aria-label="${label}"], svg[title="${label}"]`);
+}
+
 function getActionCount(element) {
   return [...element.querySelectorAll('[role="button"], button')]
-    .filter(button => ['Like', 'Comment', 'Repost', 'Share'].some(label => button.querySelector(`svg[aria-label="${label}"]`))).length;
+    .filter(button => ['Like', 'Comment', 'Repost', 'Share'].some(label => getNativeActionIcon(button, label))).length;
 }
 
 function getActionLabels(element) {
   return ['Like', 'Comment', 'Repost', 'Share']
-    .filter(label => element.querySelector(`svg[aria-label="${label}"]`));
+    .filter(label => getNativeActionIcon(element, label));
 }
 
 function getDirectActionItems(row) {
@@ -281,7 +305,7 @@ function findActionRow(shareControl) {
 
 function getActionRows() {
   const rows = new Map();
-  document.querySelectorAll('svg[aria-label="Share"]').forEach(shareIcon => {
+  document.querySelectorAll('svg[aria-label="Share"], svg[title="Share"]').forEach(shareIcon => {
     const shareControl = shareIcon.closest('[role="button"], button');
     const actionRow = shareControl && findActionRow(shareControl);
     if (shareControl && actionRow && !rows.has(actionRow)) rows.set(actionRow, shareControl);
@@ -319,6 +343,37 @@ function findScopeMediaContainer(media) {
   let node = media.parentElement;
   while (node && node !== document.body) {
     const rect = node.getBoundingClientRect();
+    // A single Threads video can be painted as a real video in one layer and
+    // a same-size JPEG poster in a sibling layer. The first one-media wrapper
+    // belongs only to the video and sits underneath that poster, so a button
+    // appended there looks present but cannot receive clicks. Use their first
+    // shared visual card instead.
+    if (media.tagName === 'VIDEO') {
+      // The player controls are a sibling overlay rather than an ancestor of
+      // the video. Put our control in that top interactive surface whenever
+      // it is available, otherwise the poster/player overlay wins hit-testing
+      // even over a button with a very large z-index.
+      const playerOverlay = [...node.querySelectorAll('[role="group"][aria-label="Video player"]')]
+        .find(player => {
+          const playerRect = player.getBoundingClientRect();
+          return Math.abs(playerRect.left - mediaRect.left) < 1 &&
+            Math.abs(playerRect.top - mediaRect.top) < 1 &&
+            Math.abs(playerRect.width - mediaRect.width) < 1 &&
+            Math.abs(playerRect.height - mediaRect.height) < 1;
+        });
+      if (playerOverlay) return playerOverlay;
+
+      const hasMatchingPoster = [...node.querySelectorAll('img')].some(image => {
+        const imageRect = image.getBoundingClientRect();
+        return Math.abs(imageRect.left - mediaRect.left) < 1 &&
+          Math.abs(imageRect.top - mediaRect.top) < 1 &&
+          Math.abs(imageRect.width - mediaRect.width) < 1 &&
+          Math.abs(imageRect.height - mediaRect.height) < 1;
+      });
+      if (hasMatchingPoster && rect.width >= mediaRect.width && rect.height >= mediaRect.height) {
+        return node;
+      }
+    }
     const mediaCount = node.querySelectorAll('img, video').length;
     if (mediaCount === 1 && rect.width >= mediaRect.width && rect.height >= mediaRect.height) {
       return node;
@@ -355,6 +410,7 @@ function findDownloadScopes() {
   const attachments = new Map();
 
   document.querySelectorAll('img, video').forEach(element => {
+    if (isMediaInDraftComposer(element)) return;
     if (element.tagName === 'IMG' && (!isUsableImage(element) || isRenderedVideoPoster(element))) return;
     const container = findScopeMediaContainer(element);
     const url = getMediaUrl(element);
@@ -440,10 +496,18 @@ function injectMediaDownloadButton(scope, item) {
   const { container } = item;
   if (!container) return;
 
-  const existingButton = container.querySelector(`.${ITEM_DOWNLOAD_BUTTON_CLASS}`);
+  // Multi-media cards already provide a native interactive wrapper and work
+  // correctly with an in-card control. Only the standalone player layout
+  // lacks that wrapper and needs the document-level escape hatch.
+  const useDocumentOverlay = item.type === 'video' && !container.matches('[role="button"]');
+  const existingButton = useDocumentOverlay
+    ? [...document.querySelectorAll(`.${ITEM_DOWNLOAD_BUTTON_CLASS}`)]
+      .find(button => button.downloadContainer === container)
+    : container.querySelector(`.${ITEM_DOWNLOAD_BUTTON_CLASS}`);
   if (existingButton) {
     existingButton.downloadScope = scope;
     existingButton.downloadItem = item;
+    if (useDocumentOverlay) positionVideoDownloadButton(existingButton, container);
     return;
   }
 
@@ -455,9 +519,15 @@ function injectMediaDownloadButton(scope, item) {
   button.innerHTML = downloadIcon(16);
   button.downloadScope = scope;
   button.downloadItem = item;
+  button.downloadContainer = container;
   button.style.cssText = 'position:absolute!important;top:8px!important;right:8px!important;z-index:2147483647!important;width:28px!important;height:28px!important;padding:0!important;border:0!important;border-radius:50%!important;background:rgba(0,0,0,.65)!important;color:#fff!important;cursor:pointer!important;pointer-events:auto!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;opacity:1!important;transition:opacity .15s ease!important;';
-  if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
-  container.append(button);
+  if (useDocumentOverlay) {
+    document.body.append(button);
+    positionVideoDownloadButton(button, container);
+  } else {
+    if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
+    container.append(button);
+  }
   button.addEventListener('click', event => {
     event.preventDefault();
     event.stopPropagation();
@@ -468,6 +538,17 @@ function injectMediaDownloadButton(scope, item) {
       startLazyVideoDownload(button.downloadScope.metadata, currentItem);
     }
   });
+}
+
+function positionVideoDownloadButton(button, container) {
+  const rect = container.getBoundingClientRect();
+  const visible = rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight;
+  button.style.display = visible ? 'inline-flex' : 'none';
+  if (!visible) return;
+  button.style.position = 'fixed';
+  button.style.top = `${Math.max(8, rect.top + 8)}px`;
+  button.style.left = `${Math.max(8, rect.right - 36)}px`;
+  button.style.right = 'auto';
 }
 
 function injectButtons() {
@@ -490,13 +571,13 @@ function injectButtons() {
   scopes.forEach(injectPostDownloadButton);
   const mediaContainers = new Set(scopes.flatMap(scope => scope.media.map(item => item.container)));
   document.querySelectorAll(`.${ITEM_DOWNLOAD_BUTTON_CLASS}`).forEach(button => {
-    if (!mediaContainers.has(button.parentElement)) button.remove();
+    if (!mediaContainers.has(button.downloadContainer || button.parentElement)) button.remove();
   });
   scopes.forEach(scope => scope.media.forEach(item => injectMediaDownloadButton(scope, item)));
 }
 
 let injectQueued = false;
-const observer = new MutationObserver(() => {
+function queueInjection() {
   if (injectQueued) return;
   injectQueued = true;
   requestAnimationFrame(() => {
@@ -506,11 +587,17 @@ const observer = new MutationObserver(() => {
     // a moment later. Run once more after that settled layout is available.
     window.setTimeout(injectButtons, 250);
   });
-});
+}
+
+const observer = new MutationObserver(queueInjection);
 observer.observe(document.body, {
   childList: true,
   subtree: true,
   attributes: true,
-  attributeFilter: ['src', 'srcset', 'poster', 'href', 'aria-label'],
+  attributeFilter: ['src', 'srcset', 'poster', 'href', 'aria-label', 'title'],
 });
+// Video controls live in a document-level overlay, so keep them aligned with
+// their media while feeds scroll or a responsive layout changes.
+window.addEventListener('scroll', queueInjection, true);
+window.addEventListener('resize', queueInjection);
 injectButtons();
