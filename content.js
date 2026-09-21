@@ -208,6 +208,15 @@ function isUsableImage(image) {
   return Boolean(src) && !isProfileImage && !isInlineTextAsset && !isTinyInlineAsset;
 }
 
+function isUsableVideo(video) {
+  const src = getMediaUrl(video);
+  const rect = video.getBoundingClientRect();
+  // Music bars use a hidden blob-backed video internally for audio playback.
+  // It is neither a visible attachment nor a directly downloadable post file.
+  return Boolean(src) && !src.startsWith('blob:') &&
+    rect.width >= MEDIA_MINIMUM_SIZE && rect.height >= MEDIA_MINIMUM_SIZE;
+}
+
 function isLazyVideoPoster(image) {
   // Instagram-shared carousel videos sometimes expose only a poster until the
   // card is opened. Unlike normal image cards, this poster has no srcset.
@@ -412,6 +421,7 @@ function findDownloadScopes() {
   document.querySelectorAll('img, video').forEach(element => {
     if (isMediaInDraftComposer(element)) return;
     if (element.tagName === 'IMG' && (!isUsableImage(element) || isRenderedVideoPoster(element))) return;
+    if (element.tagName === 'VIDEO' && !isUsableVideo(element)) return;
     const container = findScopeMediaContainer(element);
     const url = getMediaUrl(element);
     if (!container || !url) return;
